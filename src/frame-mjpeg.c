@@ -55,19 +55,19 @@ static void _error_exit(j_common_ptr dinfo) {
 
 /* ISO/IEC 10918-1:1993(E) K.3.3. Default Huffman tables used by MJPEG UVC devices
    which don't specify a Huffman table in the JPEG stream. */
-static const unsigned char dc_lumi_len[] = 
+static const unsigned char dc_lumi_len[] =
   {0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-static const unsigned char dc_lumi_val[] = 
+static const unsigned char dc_lumi_val[] =
   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-static const unsigned char dc_chromi_len[] = 
+static const unsigned char dc_chromi_len[] =
   {0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
-static const unsigned char dc_chromi_val[] = 
+static const unsigned char dc_chromi_val[] =
   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-static const unsigned char ac_lumi_len[] = 
+static const unsigned char ac_lumi_len[] =
   {0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
-static const unsigned char ac_lumi_val[] = 
+static const unsigned char ac_lumi_val[] =
   {0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21,
    0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71,
    0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1,
@@ -86,9 +86,9 @@ static const unsigned char ac_lumi_val[] =
    0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1,
    0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
-static const unsigned char ac_chromi_len[] = 
+static const unsigned char ac_chromi_len[] =
   {0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
-static const unsigned char ac_chromi_val[] = 
+static const unsigned char ac_chromi_val[] =
   {0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31,
    0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22,
    0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1,
@@ -170,7 +170,7 @@ uvc_error_t uvc_mjpeg2rgb(uvc_frame_t *in, uvc_frame_t *out) {
 
   lines_read = 0;
   while (dinfo.output_scanline < dinfo.output_height) {
-    unsigned char *buffer[1] = { (uint8_t*)out->data + lines_read * out->step };
+    unsigned char *buffer[1] = {( unsigned char*) out->data + lines_read * out->step };
     int num_scanlines;
 
     num_scanlines = jpeg_read_scanlines(&dinfo, buffer, 1);

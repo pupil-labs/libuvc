@@ -13,6 +13,12 @@ extern "C" {
 #endif
 #include <libuvc/libuvc_config.h>
 #include <errno.h>
+#include <stdint.h>
+#include <sys/time.h>
+
+struct libusb_context;
+struct libusb_device_handle;
+
 /** UVC error types, based on libusb errors
  * @ingroup diag
  */
@@ -72,8 +78,16 @@ enum uvc_frame_format {
   UVC_FRAME_FORMAT_BGR,
   /** Motion-JPEG (or JPEG) encoded images */
   UVC_FRAME_FORMAT_MJPEG,
+  /** Greyscale images */
   UVC_FRAME_FORMAT_GRAY8,
+  UVC_FRAME_FORMAT_GRAY16,
+  /* Raw colour mosaic images */
   UVC_FRAME_FORMAT_BY8,
+  UVC_FRAME_FORMAT_BA81,
+  UVC_FRAME_FORMAT_SGRBG8,
+  UVC_FRAME_FORMAT_SGBRG8,
+  UVC_FRAME_FORMAT_SRGGB8,
+  UVC_FRAME_FORMAT_SBGGR8,
   /** Number of formats understood */
   UVC_FRAME_FORMAT_COUNT,
 };
@@ -89,6 +103,7 @@ enum uvc_frame_format {
 #define UVC_COLOR_FORMAT_BGR UVC_FRAME_FORMAT_BGR
 #define UVC_COLOR_FORMAT_MJPEG UVC_FRAME_FORMAT_MJPEG
 #define UVC_COLOR_FORMAT_GRAY8 UVC_FRAME_FORMAT_GRAY8
+#define UVC_COLOR_FORMAT_GRAY16 UVC_FRAME_FORMAT_GRAY16
 
 /** VideoStreaming interface descriptor subtype (A.6) */
 enum uvc_vs_desc_subtype {
@@ -504,7 +519,7 @@ uvc_error_t uvc_open(
 void uvc_close(uvc_device_handle_t *devh);
 
 uvc_device_t *uvc_get_device(uvc_device_handle_t *devh);
-libusb_device_handle *uvc_get_libusb_handle(uvc_device_handle_t *devh);
+struct libusb_device_handle *uvc_get_libusb_handle(uvc_device_handle_t *devh);
 
 void uvc_ref_device(uvc_device_t *dev);
 void uvc_unref_device(uvc_device_t *dev);
