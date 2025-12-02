@@ -280,6 +280,15 @@ uint8_t uvc_get_device_address(uvc_device_t *dev)
   return libusb_get_device_address(dev->usb_dev);
 }
 
+uvc_error_t uvc_open_subdevice(
+    uvc_device_t *dev,
+    uvc_device_handle_t **devh,
+    int should_detach_kernel_driver,
+    int subdevice)
+{
+  dev->subdevice = subdevice;
+  return uvc_open(dev, devh, should_detach_kernel_driver);
+}
 /** @brief Open a UVC device
  * @ingroup device
  *
@@ -1033,6 +1042,7 @@ uvc_error_t uvc_scan_control(uvc_device_t *dev, uvc_device_info_t *info)
   }
   uvc_free_device_descriptor(dev_desc);
 
+  int ctrl_if_idx = 0;
   for (interface_idx = 0; interface_idx < info->config->bNumInterfaces; ++interface_idx)
   {
     if_desc = &info->config->interface[interface_idx].altsetting[0];
@@ -1040,7 +1050,7 @@ uvc_error_t uvc_scan_control(uvc_device_t *dev, uvc_device_info_t *info)
     if (haveTISCamera && if_desc->bInterfaceClass == 255 && if_desc->bInterfaceSubClass == 1) // Video, Control
       break;
 
-    if (if_desc->bInterfaceClass == 14 && if_desc->bInterfaceSubClass == 1) // Video, Control
+    if (if_desc->bInterfaceClass == 14 && if_desc->bInterfaceSubClass == 1 && ctrl_if_idx++ == dev->subdevice) // Video, Control
       break;
 
     if_desc = NULL;
@@ -1110,8 +1120,7 @@ uvc_error_t uvc_parse_vc_header(uvc_device_t *dev,
   case 0x0110:
     break;
   default:
-    UVC_EXIT(UVC_ERROR_NOT_SUPPORTED);
-    return UVC_ERROR_NOT_SUPPORTED;
+    info->ctrl_if.dwClockFrequency = DW_TO_INT(block + 7);
   }
 
   for (i = 12; i < block_size; ++i)

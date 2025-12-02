@@ -744,6 +744,12 @@ uvc_error_t uvc_any2bgr(uvc_frame_t *in, uvc_frame_t *out);
 uvc_error_t uvc_yuyv2y(uvc_frame_t *in, uvc_frame_t *out);
 uvc_error_t uvc_yuyv2uv(uvc_frame_t *in, uvc_frame_t *out);
 
+  uvc_error_t uvc_open_subdevice(
+      uvc_device_t *dev,
+      uvc_device_handle_t **devh,
+      int should_detach_kernel_driver,
+      int subdevice);
+
 #ifdef LIBUVC_HAS_JPEG
 uvc_error_t uvc_mjpeg2rgb(uvc_frame_t *in, uvc_frame_t *out);
 #endif
