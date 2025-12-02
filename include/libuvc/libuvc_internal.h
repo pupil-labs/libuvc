@@ -196,6 +196,7 @@ struct uvc_device {
   struct uvc_context *ctx;
   int ref;
   libusb_device *usb_dev;
+  int subdevice; // When we have composite device
 };
 
 typedef struct uvc_device_info {
