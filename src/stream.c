@@ -259,16 +259,15 @@ uvc_error_t uvc_query_stream_ctrl(
 
     if (len == 34)
     {
-      ctrl->dwClockFrequency = DW_TO_INT(buf + 26);
-      UVC_DEBUG("ctrl->dwClockFrequency = %d\n", ctrl->dwClockFrequency);
       ctrl->bmFramingInfo = buf[30];
       ctrl->bPreferredVersion = buf[31];
       ctrl->bMinVersion = buf[32];
       ctrl->bMaxVersion = buf[33];
-      /** @todo support UVC 1.1 */
     }
-    else
-      ctrl->dwClockFrequency = devh->info->ctrl_if.dwClockFrequency;
+
+    // Always use clock frequency from Video Control Interface Header descriptor
+    ctrl->dwClockFrequency = devh->info->ctrl_if.dwClockFrequency;
+    UVC_DEBUG("ctrl->dwClockFrequency = %d\n", ctrl->dwClockFrequency);
 
     /* fix up block for cameras that fail to set dwMax* */
     if (ctrl->dwMaxVideoFrameSize == 0)
