@@ -191,13 +191,15 @@ uvc_error_t uvc_query_stream_ctrl(
     uint8_t probe,
     enum uvc_req_code req)
 {
-  uint8_t buf[34];
+  uint8_t buf[48];
   size_t len;
   uvc_error_t err;
 
   memset(buf, 0, sizeof(buf));
 
-  if (devh->info->ctrl_if.bcdUVC >= 0x0110)
+  if (devh->info->ctrl_if.bcdUVC >= 0x0150)
+    len = 48;
+  else if (devh->info->ctrl_if.bcdUVC >= 0x0110)
     len = 34;
   else
     len = 26;
