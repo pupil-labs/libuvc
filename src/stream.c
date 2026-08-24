@@ -1170,10 +1170,23 @@ uvc_error_t uvc_stream_start(
 
         if (endpoint->bEndpointAddress == format_desc->parent->bEndpointAddress)
         {
+          struct libusb_ss_endpoint_companion_descriptor *ss_endpoint = NULL;
+
           endpoint_bytes_per_packet = endpoint->wMaxPacketSize;
           // wMaxPacketSize: [unused:2 (multiplier-1):3 size:11]
           endpoint_bytes_per_packet = (endpoint_bytes_per_packet & 0x07ff) *
                                       (((endpoint_bytes_per_packet >> 11) & 3) + 1);
+
+          /* SuperSpeed isochronous endpoints describe their full service-interval
+           * capacity in the endpoint companion descriptor.  wMaxPacketSize alone
+           * omits bursting and can make valid high-bandwidth modes look unusable. */
+          if (libusb_get_ss_endpoint_companion_descriptor(
+                  strmh->devh->dev->ctx->usb_ctx, endpoint, &ss_endpoint) == 0)
+          {
+            if (ss_endpoint->wBytesPerInterval > endpoint_bytes_per_packet)
+              endpoint_bytes_per_packet = ss_endpoint->wBytesPerInterval;
+            libusb_free_ss_endpoint_companion_descriptor(ss_endpoint);
+          }
           break;
         }
       }
