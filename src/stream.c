@@ -588,20 +588,123 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
   {
     const int first_measure_int = 30 * (10000000L / strmh->cur_ctrl.dwFrameInterval);
     int64_t pts = strmh->pts;
-    if (strmh->pts < strmh->hold_pts)
-    {
-      strmh->pts_time_base += 1LL << 32; // get_dev_time_us(strmh, (1LL << 32));
-    }
-    strmh->frame_ts_us = strmh->dev_clk_start_host_us + get_dev_time_us(strmh, strmh->pts_time_base + pts);
+    int interpolated = 0;
     int64_t host_ts;
     get_precise_timestamp(&host_ts);
     int64_t host_ts_us = get_host_time_us(host_ts);
+
+    if (pts == 0)
+    {
+      /* Dropped PTS packet (isoc has no retransmit) -- interpolate from the last frame. */
+      strmh->frame_ts_us = strmh->hold_frame_ts_us
+                           + strmh->cur_ctrl.dwFrameInterval / 10;
+      strmh->pts = strmh->hold_pts;
+      interpolated = 1;
+      strmh->ts_lost++;
+    }
+    else
+    {
+      /* Unwrap in tick space against a host-time-predicted PTS rather than
+       * the old pts < hold_pts heuristic, which misfires when hold_pts is
+       * itself a bad frame. Host time (not a call counter) survives a
+       * whole dropped frame, which never calls this function at all. */
+      int64_t ticks_per_frame = (int64_t)strmh->cur_ctrl.dwFrameInterval
+                                * (int64_t)strmh->cur_ctrl.dwClockFrequency / 10000000LL;
+      int64_t nominal_interval_us = strmh->cur_ctrl.dwFrameInterval / 10;
+      if (strmh->last_real_unwrapped_set && ticks_per_frame > 0 && nominal_interval_us > 0)
+      {
+        int64_t n = (host_ts_us - strmh->last_real_host_us + nominal_interval_us / 2)
+                   / nominal_interval_us;
+        if (n < 1)
+          n = 1;
+        int64_t expected = strmh->last_real_unwrapped_pts + n * ticks_per_frame;
+        int64_t cand[3] = {
+          strmh->pts_time_base + pts,
+          strmh->pts_time_base + pts - (1LL << 32),
+          strmh->pts_time_base + pts + (1LL << 32),
+        };
+        int best = 0;
+        int64_t best_err = cand[0] - expected;
+        if (best_err < 0)
+          best_err = -best_err;
+        for (int i = 1; i < 3; i++)
+        {
+          int64_t err = cand[i] - expected;
+          if (err < 0)
+            err = -err;
+          if (err < best_err)
+          {
+            best_err = err;
+            best = i;
+          }
+        }
+        if (best_err <= ticks_per_frame)
+        {
+          if (best != 0)
+          {
+            if (strmh->ts_wraps == 0)
+            {
+              printf("*** PTS wrap at seq=%u: pts=%lld hold_pts=%lld (%s)\n",
+                     strmh->seq, (long long)pts, (long long)strmh->hold_pts,
+                     best == 2 ? "forward" : "backward");
+            }
+            strmh->ts_wraps++;
+          }
+          strmh->pts_time_base = cand[best] - pts;
+          strmh->last_real_unwrapped_pts = cand[best];
+          strmh->last_real_host_us = host_ts_us;
+        }
+      }
+      else
+      {
+        strmh->last_real_unwrapped_pts = strmh->pts_time_base + pts;
+        strmh->last_real_unwrapped_set = 1;
+        strmh->last_real_host_us = host_ts_us;
+      }
+      strmh->frame_ts_us = strmh->dev_clk_start_host_us
+                           + get_dev_time_us(strmh, strmh->pts_time_base + pts);
+    }
+
     int64_t time_diff = host_ts_us - strmh->frame_ts_us;
-    strmh->avg_diff += time_diff;
+
+    /* Exclude frames >1s off the running td_ref from the freq-correction average. */
+    int64_t td_dev = time_diff - strmh->td_ref;
+    if (td_dev < 0)
+      td_dev = -td_dev;
+    if (strmh->td_ref_set && td_dev > 1000000LL)
+    {
+      strmh->td_skipped++;
+    }
+    else
+    {
+      strmh->avg_diff += time_diff;
+      if (!strmh->td_ref_set)
+      {
+        strmh->td_ref = time_diff;
+        strmh->td_ref_set = 1;
+      }
+      else
+      {
+        strmh->td_ref += (time_diff - strmh->td_ref) / 64;
+      }
+    }
 
     if (!((strmh->seq + 1) % first_measure_int))
     {
-      strmh->avg_diff /= first_measure_int;
+      int64_t n_used = (int64_t)first_measure_int - strmh->td_skipped;
+      if (n_used < 1)
+        n_used = 1;
+      strmh->avg_diff /= n_used;
+
+      if (strmh->ts_lost || strmh->ts_wraps || strmh->td_skipped)
+      {
+        printf("*** ts window: %u PTS lost, %u wraps, %lld excluded from freq correction, offset ref %lld us\n",
+               strmh->ts_lost, strmh->ts_wraps, (long long)strmh->td_skipped,
+               (long long)strmh->td_ref);
+      }
+      strmh->ts_lost = strmh->ts_wraps = 0;
+      strmh->td_skipped = 0;
+
       if (!strmh->initial_avg_diff_set)
       {
         strmh->initial_avg_diff = strmh->avg_diff;
@@ -615,11 +718,18 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
         int64_t td = host_ts_us - strmh->initial_host_ts;
         double slope = (double)diff_incr / td;
         // printf("**** After %d frames, avg_diff = %lld, slope=%f\n", strmh->seq+1, strmh->avg_diff, slope);
-        if (strmh->diff_measures > 10 && fabs(slope) > 0.0000005 /* 0.000005*/)
+        if (strmh->diff_measures > 10 && fabs(slope) > 0.0000005)
         {
+          /* Apply the new rate without retroactively rescaling already-emitted
+           * timestamps: absorb the jump into dev_clk_start_host_us instead of
+           * changing corrected_clock_freq in place. */
+          int64_t acc = strmh->pts_time_base + (interpolated ? strmh->hold_pts : pts);
+          int64_t dev_us_old = get_dev_time_us(strmh, acc);
           strmh->corrected_clock_freq *= 1.0 - slope;
+          strmh->dev_clk_start_host_us += dev_us_old - get_dev_time_us(strmh, acc);
           strmh->initial_avg_diff_set = 0;
-          printf("*** Correcting clock frequency to %llu\n", strmh->corrected_clock_freq);
+          printf("*** Correcting clock frequency to %llu (slope=%f)\n",
+                 strmh->corrected_clock_freq, slope);
         }
       }
       strmh->avg_diff = 0;
@@ -1089,6 +1199,16 @@ uvc_error_t uvc_stream_start(
   strmh->pts_time_base = 0;
   strmh->initial_avg_diff = 0;
   strmh->initial_avg_diff_set = 0;
+  strmh->hold_pts = 0;
+  strmh->hold_frame_ts_us = 0;
+  strmh->td_ref = 0;
+  strmh->td_ref_set = 0;
+  strmh->td_skipped = 0;
+  strmh->ts_lost = 0;
+  strmh->ts_wraps = 0;
+  strmh->last_real_unwrapped_pts = 0;
+  strmh->last_real_unwrapped_set = 0;
+  strmh->last_real_host_us = 0;
 
   frame_desc = uvc_find_frame_desc_stream(strmh, ctrl->bFormatIndex, ctrl->bFrameIndex);
   if (!frame_desc)

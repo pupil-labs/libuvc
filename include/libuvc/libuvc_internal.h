@@ -274,6 +274,17 @@ struct uvc_stream_handle {
   int64_t initial_host_ts;
   int64_t diff_measures;
   uint64_t corrected_clock_freq;
+  /** Slow EMA of (host_ts - frame_ts), used to exclude outlier frames from avg_diff */
+  int64_t td_ref;
+  int td_ref_set;
+  /** Per-window counters for the diagnostic line */
+  int64_t td_skipped;
+  uint32_t ts_lost;
+  uint32_t ts_wraps;
+  /** Last trusted unwrapped PTS and host time, for tick-domain wrap prediction */
+  int64_t last_real_unwrapped_pts;
+  int last_real_unwrapped_set;
+  int64_t last_real_host_us;
 };
 
 /** Handle on an open UVC device
