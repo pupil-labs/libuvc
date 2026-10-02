@@ -521,13 +521,13 @@ uvc_error_t uvc_get_device_descriptor(
 {
   uvc_device_descriptor_t *desc_internal;
   struct libusb_device_descriptor usb_desc;
-  struct libusb_device_handle *usb_devh;
+  libusb_device_handle *usb_devh = NULL;
+  int opened_here = 0;
   uvc_error_t ret;
 
   UVC_ENTER();
 
   ret = libusb_get_device_descriptor(dev->usb_dev, &usb_desc);
-
   if (ret != UVC_SUCCESS)
   {
     UVC_EXIT(ret);
@@ -535,43 +535,110 @@ uvc_error_t uvc_get_device_descriptor(
   }
 
   desc_internal = calloc(1, sizeof(*desc_internal));
+  if (!desc_internal)
+  {
+    UVC_EXIT(UVC_ERROR_NO_MEM);
+    return UVC_ERROR_NO_MEM;
+  }
+
   desc_internal->idVendor = usb_desc.idVendor;
   desc_internal->idProduct = usb_desc.idProduct;
 
-  if (libusb_open(dev->usb_dev, &usb_devh) == 0)
+  /*
+   * Prefer an existing open handle for this exact uvc_device_t.
+   *
+   * uvc_context_t already maintains a linked list of open device
+   * handles, so there is no reason to libusb_open() the same device
+   * again just to retrieve string descriptors.
+   */
+  if (dev->ctx)
+  {
+    uvc_device_handle_t *devh = dev->ctx->open_devices;
+
+    while (devh)
+    {
+      if (devh->dev == dev && devh->usb_devh)
+      {
+        usb_devh = devh->usb_devh;
+        break;
+      }
+
+      devh = devh->next;
+    }
+  }
+
+  /*
+   * Device isn't already open through libuvc. Open it temporarily
+   * so string descriptors can still be retrieved for enumeration.
+   */
+  if (!usb_devh)
+  {
+    if (libusb_open(dev->usb_dev, &usb_devh) == 0)
+    {
+      opened_here = 1;
+    }
+    else
+    {
+      UVC_DEBUG(
+          "can't open device %04x:%04x for string descriptors",
+          usb_desc.idVendor,
+          usb_desc.idProduct);
+    }
+  }
+
+  if (usb_devh)
   {
     unsigned char buf[64];
+    int bytes;
 
-    int bytes = libusb_get_string_descriptor_ascii(
-        usb_devh, usb_desc.iSerialNumber, buf, sizeof(buf));
+    if (usb_desc.iSerialNumber)
+    {
+      bytes = libusb_get_string_descriptor_ascii(
+          usb_devh,
+          usb_desc.iSerialNumber,
+          buf,
+          sizeof(buf));
 
-    if (bytes > 0)
-      desc_internal->serialNumber = strdup((const char *)buf);
+      if (bytes > 0)
+        desc_internal->serialNumber = strdup((const char *)buf);
+    }
 
-    bytes = libusb_get_string_descriptor_ascii(
-        usb_devh, usb_desc.iManufacturer, buf, sizeof(buf));
+    if (usb_desc.iManufacturer)
+    {
+      bytes = libusb_get_string_descriptor_ascii(
+          usb_devh,
+          usb_desc.iManufacturer,
+          buf,
+          sizeof(buf));
 
-    if (bytes > 0)
-      desc_internal->manufacturer = strdup((const char *)buf);
+      if (bytes > 0)
+        desc_internal->manufacturer = strdup((const char *)buf);
+    }
 
-    bytes = libusb_get_string_descriptor_ascii(
-        usb_devh, usb_desc.iProduct, buf, sizeof(buf));
+    if (usb_desc.iProduct)
+    {
+      bytes = libusb_get_string_descriptor_ascii(
+          usb_devh,
+          usb_desc.iProduct,
+          buf,
+          sizeof(buf));
 
-    if (bytes > 0)
-      desc_internal->product = strdup((const char *)buf);
+      if (bytes > 0)
+        desc_internal->product = strdup((const char *)buf);
+    }
 
-    libusb_close(usb_devh);
-  }
-  else
-  {
-    UVC_DEBUG("can't open device %04x:%04x, not fetching serial etc.",
-              usb_desc.idVendor, usb_desc.idProduct);
+    /*
+     * Only close handles that this function opened itself.
+     * Existing libuvc handles remain owned by uvc_device_handle_t.
+     */
+    if (opened_here)
+      libusb_close(usb_devh);
   }
 
   *desc = desc_internal;
 
-  UVC_EXIT(ret);
-  return ret;
+  UVC_EXIT(UVC_SUCCESS);
+  return UVC_SUCCESS;
 }
 
 /**
@@ -702,10 +769,11 @@ uvc_error_t uvc_get_device_list(
 
     if (got_interface)
     {
-      uvc_device_t *uvc_dev = malloc(sizeof(*uvc_dev));
+      uvc_device_t *uvc_dev = calloc(1, sizeof(*uvc_dev));
       uvc_dev->ctx = ctx;
       uvc_dev->ref = 0;
       uvc_dev->usb_dev = usb_dev;
+      uvc_dev->subdevice = 0;
       uvc_ref_device(uvc_dev);
 
       num_uvc_devices++;
