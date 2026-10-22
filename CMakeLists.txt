@@ -164,5 +164,8 @@ write_basic_package_version_file(
   COMPATIBILITY SameMajorVersion
 )
 
-enable_testing()
-add_subdirectory(tests)
+option(LIBUVC_BUILD_TESTING "Build libuvc tests" ON)
+if(LIBUVC_BUILD_TESTING)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

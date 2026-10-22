@@ -16,7 +16,7 @@
 
 #define DEBUG_PTS_LEN (60 * 200)
 /** Converts an unaligned four-byte little-endian integer into an int32 */
-#define DW_TO_INT(p) ((p)[0] | ((p)[1] << 8) | ((p)[2] << 16) | ((p)[3] << 24))
+#define DW_TO_INT(p) ((uint32_t)(p)[0] | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 /** Converts an unaligned two-byte little-endian integer into an int16 */
 #define SW_TO_SHORT(p) ((p)[0] | ((p)[1] << 8))
 /** Converts an int16 into an unaligned two-byte little-endian integer */
@@ -242,6 +242,7 @@ struct uvc_stream_handle {
   uint32_t seq, hold_seq;
   uint32_t pts, hold_pts;
   uint32_t last_scr, hold_last_scr;
+  uint8_t pts_valid, hold_pts_valid, last_scr_valid;
   size_t got_bytes, hold_bytes;
   uint8_t *outbuf, *holdbuf;
   pthread_mutex_t cb_mutex;
@@ -257,12 +258,14 @@ struct uvc_stream_handle {
   int flying_xfers;
   /** Start time of device clock in host time, in us */
   int64_t  dev_clk_start_host_us;
+  uint8_t dev_clk_start_host_us_valid;
   int64_t last_iso_ts_us;
+  uint8_t last_iso_ts_us_valid;
+  /** Estimated host time of the packet containing last_scr */
+  int64_t last_scr_host_us;
   int64_t frame_ts_us;
   int64_t hold_frame_ts_us;
   int64_t pts_time_base;
-  /** Transfer duration of frame in microframes */
-  int frame_xfer_len_mf;
   int packets_per_iso_xfer;
   int64_t pts_diff[DEBUG_PTS_LEN];
   int pts_start;
@@ -325,4 +328,3 @@ uvc_error_t uvc_release_if(uvc_device_handle_t *devh, int idx);
 
 #endif // !def(LIBUVC_INTERNAL_H)
 /** @endcond */
-

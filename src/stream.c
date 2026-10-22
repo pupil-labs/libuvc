@@ -498,6 +498,7 @@ void _uvc_swap_buffers(uvc_stream_handle_t *strmh)
   strmh->outbuf = tmp_buf;
   strmh->hold_last_scr = strmh->last_scr;
   strmh->hold_pts = strmh->pts;
+  strmh->hold_pts_valid = strmh->pts_valid;
   strmh->hold_seq = strmh->seq;
   strmh->hold_frame_ts_us = strmh->frame_ts_us;
 
@@ -507,7 +508,10 @@ void _uvc_swap_buffers(uvc_stream_handle_t *strmh)
   strmh->seq++;
   strmh->got_bytes = 0;
   strmh->last_scr = 0;
+  strmh->last_scr_valid = 0;
   strmh->pts = 0;
+  strmh->pts_valid = 0;
+  strmh->frame_ts_us = 0;
 }
 
 void get_precise_timestamp_freq(int64_t *perf_freq)
@@ -523,7 +527,9 @@ void get_precise_timestamp_freq(int64_t *perf_freq)
 
 extern inline int64_t get_dev_time_us(uvc_stream_handle_t *strmh, int64_t dev_ticks)
 {
-  int64_t time_us = ((int64_t)dev_ticks * MILLION + (strmh->corrected_clock_freq >> 1)) / strmh->corrected_clock_freq;
+  int64_t clock_freq = (int64_t)strmh->corrected_clock_freq;
+  int64_t rounding = dev_ticks >= 0 ? clock_freq >> 1 : -(clock_freq >> 1);
+  int64_t time_us = (dev_ticks * MILLION + rounding) / clock_freq;
 
   return time_us;
 }
@@ -574,21 +580,28 @@ void get_precise_timestamp(int64_t *ts)
 /** @internal
  * @brief Populate frame_ts_us if possible
  */
-void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
+void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh)
 {
-  if (!strmh->dev_clk_start_host_us)
+  if (!strmh->dev_clk_start_host_us_valid)
   {
-    int64_t frame_end_time_us = get_dev_time_us(strmh, strmh->last_scr);
-    int64_t frame_end_time_host_us = get_host_time_us(strmh->last_iso_ts_us);
-    frame_end_time_host_us -= (strmh->frame_xfer_len_mf + strmh->packets_per_iso_xfer - packet_id) * 125;
-    frame_end_time_host_us -= frame_end_time_us;
-    strmh->dev_clk_start_host_us = frame_end_time_host_us;
+    if (!strmh->last_scr_valid || !strmh->pts_valid)
+      return;
+
+    strmh->dev_clk_start_host_us =
+        strmh->last_scr_host_us - get_dev_time_us(strmh, strmh->last_scr);
+    int64_t pts_scr_delta = (uint32_t)(strmh->pts - strmh->last_scr);
+    if (pts_scr_delta > INT32_MAX)
+      pts_scr_delta -= 1LL << 32;
+    strmh->pts_time_base =
+        (int64_t)strmh->last_scr + pts_scr_delta - strmh->pts;
+    strmh->dev_clk_start_host_us_valid = 1;
   }
-  else
+
+  if (strmh->pts_valid)
   {
     const int first_measure_int = 30 * (10000000L / strmh->cur_ctrl.dwFrameInterval);
     int64_t pts = strmh->pts;
-    if (strmh->pts < strmh->hold_pts)
+    if (strmh->hold_pts_valid && strmh->pts < strmh->hold_pts)
     {
       strmh->pts_time_base += 1LL << 32; // get_dev_time_us(strmh, (1LL << 32));
     }
@@ -706,26 +719,19 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
 
     if (strmh->fid != (header_info & 1) && strmh->got_bytes != 0)
     {
-      _uvc_populate_frame_ts_us(strmh, packet_id);
+      _uvc_populate_frame_ts_us(strmh);
       /* The frame ID bit was flipped, but we have image data sitting
          around from prior transfers. This means the camera didn't send
          an EOF for the last transfer of the previous frame. */
       _uvc_swap_buffers(strmh);
     }
 
-    if (strmh->fid > -1 && (strmh->fid != (header_info & 1)))
-    {
-      strmh->frame_xfer_len_mf = 0;
-    }
-    if (strmh->frame_xfer_len_mf > -1)
-    {
-      strmh->frame_xfer_len_mf++;
-    }
     strmh->fid = header_info & 1;
 
     if (header_info & (1 << 2))
     {
       strmh->pts = DW_TO_INT(payload + variable_offset);
+      strmh->pts_valid = 1;
       variable_offset += 4;
     }
 
@@ -733,6 +739,15 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
     {
       /** @todo read the SOF token counter */
       strmh->last_scr = DW_TO_INT(payload + variable_offset);
+      if (strmh->last_iso_ts_us_valid)
+      {
+        strmh->last_scr_valid = 1;
+        /* Pair the SCR with its own packet, rather than rewinding to the
+         * beginning of the frame. */
+        strmh->last_scr_host_us =
+            get_host_time_us(strmh->last_iso_ts_us) -
+            (strmh->packets_per_iso_xfer - packet_id) * 125;
+      }
       variable_offset += 6;
     }
   }
@@ -744,7 +759,7 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
 
     if (header_info & (1 << 1))
     {
-      _uvc_populate_frame_ts_us(strmh, packet_id);
+      _uvc_populate_frame_ts_us(strmh);
       /* The EOF bit is set, so publish the complete frame */
       _uvc_swap_buffers(strmh);
     }
@@ -777,6 +792,7 @@ void LIBUSB_CALL _uvc_stream_callback(struct libusb_transfer *transfer)
     else
     {
       get_precise_timestamp(&strmh->last_iso_ts_us);
+      strmh->last_iso_ts_us_valid = 1;
       /* This is an isochronous mode transfer, so each packet has a payload transfer */
       int packet_id;
 
@@ -1091,9 +1107,16 @@ uvc_error_t uvc_stream_start(
   strmh->seq = 1;
   strmh->fid = -1;
   strmh->pts = 0;
+  strmh->pts_valid = 0;
+  strmh->hold_pts_valid = 0;
   strmh->last_scr = 0;
+  strmh->last_scr_valid = 0;
   strmh->dev_clk_start_host_us = 0;
-  strmh->frame_xfer_len_mf = 0;
+  strmh->dev_clk_start_host_us_valid = 0;
+  strmh->last_iso_ts_us = 0;
+  strmh->last_iso_ts_us_valid = 0;
+  strmh->last_scr_host_us = 0;
+  strmh->frame_ts_us = 0;
   strmh->pts_time_base = 0;
   strmh->initial_avg_diff = 0;
   strmh->initial_avg_diff_set = 0;
