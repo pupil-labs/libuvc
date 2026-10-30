@@ -583,6 +583,16 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
     frame_end_time_host_us -= (strmh->frame_xfer_len_mf + strmh->packets_per_iso_xfer - packet_id) * 125;
     frame_end_time_host_us -= frame_end_time_us;
     strmh->dev_clk_start_host_us = frame_end_time_host_us;
+
+    if (strmh->pts != 0)
+    {
+      int64_t host_ts;
+      get_precise_timestamp(&host_ts);
+      strmh->frame_ts_us = strmh->dev_clk_start_host_us + get_dev_time_us(strmh, strmh->pts);
+      strmh->last_real_unwrapped_pts = strmh->pts;
+      strmh->last_real_unwrapped_set = 1;
+      strmh->last_real_host_us = get_host_time_us(host_ts);
+    }
   }
   else
   {
@@ -644,15 +654,24 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
           {
             if (strmh->ts_wraps == 0)
             {
-              printf("*** PTS wrap at seq=%u: pts=%lld hold_pts=%lld (%s)\n",
-                     strmh->seq, (long long)pts, (long long)strmh->hold_pts,
-                     best == 2 ? "forward" : "backward");
+              // printf("*** PTS wrap at seq=%u: pts=%lld hold_pts=%lld (%s)\n",
+              //        strmh->seq, (long long)pts, (long long)strmh->hold_pts,
+              //        best == 2 ? "forward" : "backward");
             }
             strmh->ts_wraps++;
           }
           strmh->pts_time_base = cand[best] - pts;
           strmh->last_real_unwrapped_pts = cand[best];
           strmh->last_real_host_us = host_ts_us;
+          strmh->frame_ts_us = strmh->dev_clk_start_host_us
+                               + get_dev_time_us(strmh, strmh->pts_time_base + pts);
+        }
+        else
+        {
+          strmh->frame_ts_us = strmh->hold_frame_ts_us + nominal_interval_us;
+          strmh->pts = strmh->hold_pts;
+          interpolated = 1;
+          strmh->ts_rejected++;
         }
       }
       else
@@ -660,9 +679,9 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
         strmh->last_real_unwrapped_pts = strmh->pts_time_base + pts;
         strmh->last_real_unwrapped_set = 1;
         strmh->last_real_host_us = host_ts_us;
+        strmh->frame_ts_us = strmh->dev_clk_start_host_us
+                             + get_dev_time_us(strmh, strmh->pts_time_base + pts);
       }
-      strmh->frame_ts_us = strmh->dev_clk_start_host_us
-                           + get_dev_time_us(strmh, strmh->pts_time_base + pts);
     }
 
     int64_t time_diff = host_ts_us - strmh->frame_ts_us;
@@ -693,16 +712,21 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
     {
       int64_t n_used = (int64_t)first_measure_int - strmh->td_skipped;
       if (n_used < 1)
-        n_used = 1;
+      {
+        strmh->avg_diff = 0;
+        strmh->td_skipped = 0;
+        strmh->ts_lost = strmh->ts_wraps = strmh->ts_rejected = 0;
+        return;
+      }
       strmh->avg_diff /= n_used;
 
-      if (strmh->ts_lost || strmh->ts_wraps || strmh->td_skipped)
+      if (strmh->ts_lost || strmh->ts_wraps || strmh->ts_rejected || strmh->td_skipped)
       {
-        printf("*** ts window: %u PTS lost, %u wraps, %lld excluded from freq correction, offset ref %lld us\n",
-               strmh->ts_lost, strmh->ts_wraps, (long long)strmh->td_skipped,
-               (long long)strmh->td_ref);
+        // printf("*** ts window: %u PTS lost, %u wraps, %u rejected, %lld excluded from freq correction, offset ref %lld us\n",
+        //        strmh->ts_lost, strmh->ts_wraps, strmh->ts_rejected, (long long)strmh->td_skipped,
+        //        (long long)strmh->td_ref);
       }
-      strmh->ts_lost = strmh->ts_wraps = 0;
+      strmh->ts_lost = strmh->ts_wraps = strmh->ts_rejected = 0;
       strmh->td_skipped = 0;
 
       if (!strmh->initial_avg_diff_set)
@@ -718,11 +742,12 @@ void _uvc_populate_frame_ts_us(uvc_stream_handle_t *strmh, int packet_id)
         int64_t td = host_ts_us - strmh->initial_host_ts;
         double slope = (double)diff_incr / td;
         // printf("**** After %d frames, avg_diff = %lld, slope=%f\n", strmh->seq+1, strmh->avg_diff, slope);
-        if (strmh->diff_measures > 10 && fabs(slope) > 0.0000005)
+        if (strmh->diff_measures > 10 && fabs(slope) > 0.0000005
+            && td_dev <= 1000000LL)
         {
           /* Apply the new rate without retroactively rescaling already-emitted
            * timestamps: absorb the jump into dev_clk_start_host_us instead of
-           * changing corrected_clock_freq in place. */
+           * changing corrected_clock_freq in place. */ 
           int64_t acc = strmh->pts_time_base + (interpolated ? strmh->hold_pts : pts);
           int64_t dev_us_old = get_dev_time_us(strmh, acc);
           strmh->corrected_clock_freq *= 1.0 - slope;
@@ -1206,6 +1231,7 @@ uvc_error_t uvc_stream_start(
   strmh->td_skipped = 0;
   strmh->ts_lost = 0;
   strmh->ts_wraps = 0;
+  strmh->ts_rejected = 0;
   strmh->last_real_unwrapped_pts = 0;
   strmh->last_real_unwrapped_set = 0;
   strmh->last_real_host_us = 0;

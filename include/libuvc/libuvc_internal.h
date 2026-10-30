@@ -281,6 +281,8 @@ struct uvc_stream_handle {
   int64_t td_skipped;
   uint32_t ts_lost;
   uint32_t ts_wraps;
+  /** PTS candidates that failed the host-time prediction check and were interpolated instead */
+  uint32_t ts_rejected;
   /** Last trusted unwrapped PTS and host time, for tick-domain wrap prediction */
   int64_t last_real_unwrapped_pts;
   int last_real_unwrapped_set;
